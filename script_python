@@ -1,0 +1,285 @@
+import pandas as pd 
+import numpy as np
+import matplotlib.pyplot as plt
+
+### 1.Base de données 
+df = pd.read_csv(r"C:\Users\Karim\OneDrive\Desktop\BMW sales data (2010-2024).csv",sep =';')
+df.head()
+df.head(100)
+
+### 2.Elimination des données manquantes 
+df =df.dropna(axis=0)
+df
+df.shape
+# 50000 lignes et 11 colonnes
+df.describe()
+### Feature engineering
+df['Year'] = df['Year'].astype(int)
+df['Sales_Volume'] = df['Sales_Volume'].astype(int)
+df['Revenue'] = df['Price_USD'] * df['Sales_Volume']
+df
+
+
+### Création Base SQLite
+from sqlalchemy import create_engine
+import pandas as pd
+
+engine = create_engine('sqlite:///connexions.db', echo=False)
+
+df = df.to_sql('bmw', con=engine, if_exists='replace', index=False)
+df
+
+
+### Analyse SQL de base - KPI
+##### Ecrire des requêtes SQL pour en ressortir les chiffres clefs 
+##### Volume total de ventes (toutes années confondues)
+query_1 = """
+select sum(Sales_Volume) as total_sales
+from bmw
+"""
+
+df1 = pd.read_sql(query_1, con=engine)
+df1
+CA total toutes années confondues 
+query_2 = """
+select sum(Revenue) as total_revenue
+from bmw
+"""
+
+df2 = pd.read_sql(query_2, con=engine)
+df2
+##### CA total annuel 
+query_3 = """
+select Year,sum(Revenue) as total_revenue
+from bmw
+group by Year 
+order by Year
+"""
+
+df3 = pd.read_sql(query_3, con=engine)
+df3
+CA total par région
+query_4 = """
+select year, Region, sum(Revenue) AS total_revenue, sum(Sales_Volume) as total_volume
+from bmw
+group by Region, Year
+order by Year, total_revenue DESC;
+"""
+
+df4 = pd.read_sql(query_4, con=engine)
+df4
+##### Top model par CA (top 10)
+query_5 = """
+select Model, Year, sum(Sales_Volume) AS total_volume, sum(Revenue) AS total_revenue, avg(Price_USD) AS avg_price
+from bmw
+group by Model, Year 
+order by total_revenue DESC
+limit 10;
+"""
+
+df5 = pd.read_sql(query_5, con=engine)
+df5
+##### Mix carburant par année 
+query_6 = """
+select Year, Fuel_Type, sum(Sales_Volume) AS volume
+from bmw
+group by Year, Fuel_Type
+order by Year, volume desc """
+
+df6 = pd.read_sql(query_6, con=engine)
+df6
+
+### Les voitures hybrides dominent globalement le marché chaque année
+##### Revenu par modèle et type de carburant
+query_7 = """
+select
+    Model,
+    Fuel_Type,
+    sum(Revenue) AS total_revenue,
+    sum(Sales_Volume) AS total_sales
+from bmw
+group by Model, Fuel_Type
+order by total_revenue DESC
+limit 5; """
+
+df7 = pd.read_sql(query_7, con=engine)
+print()
+df7
+### Lorsqu'on regroupe par modèle et type de carburant, ces 5 voitures avec ce type de carburant dominent le marché.
+##### Part de marché par type de transmission et type de carburant dans les régions
+query_8 = """
+select 
+    Region,
+    Transmission,
+    Fuel_Type,
+    sum(Revenue) AS total_revenue,
+    sum (Sales_Volume) AS total_sales
+from bmw
+group by Region, Transmission, Fuel_Type
+order by total_revenue DESC
+limit 5
+ """
+
+df8 = pd.read_sql(query_8, con=engine)
+df8
+
+### Voici le type de transmission et le type de carburant a privilégier dans ces régions qui dominent le marché en terme de CA.
+##### CA par modèle et couleur 
+query_9 = """
+select Model,
+    Color,
+    sum(Revenue) AS total_revenue,
+    sum(Sales_Volume) AS total_sales,
+    ROUND(avg(Price_USD), 2) as avg_price
+from bmw
+group by Model, Color
+order by  total_revenue DESC
+limit 5;
+ """
+
+df9 = pd.read_sql(query_9, con=engine)
+df9
+
+# Analyse marketing permettant d'analyser quelles couleurs sont les plus rentables par modèle.
+##### Calcul du taux de croissance
+query_10 = """
+with ca_par_an AS (
+        select 
+        Year,
+        sum(Revenue) AS ca_annee_n
+        from bmw
+        group by Year)
+select
+    Year,
+    ca_annee_n,
+    lag(ca_annee_n) over(order by Year ASC) AS ca_annee_precedente,
+    round(((ca_annee_n - lag(ca_annee_n) over (order by Year ASC)) / lag(ca_annee_n) over (ORDER BY Year ASC)) * 100, 2) as taux_croissance_pourcent
+from ca_par_an
+order by Year;
+"""
+
+df10 = pd.read_sql_query(query_10, con=engine)
+df10
+
+
+
+
+### Visualisation de données 
+##### Générer des visuels permettant de répondre a un besoin business
+
+
+### Revenue total des ventes sur toute les années confondues 
+plt.figure(figsize=(10,5))
+plt.plot(df3['Year'], df3['total_revenue'])
+plt.title("Revenue total des ventes par années confondues")
+plt.xlabel("Années")
+plt.ylabel("Revenue des ventes")
+
+revenues = df3['total_revenue']
+years = df3['Year']
+
+# On identifie les pics (maxima locaux)
+for i in range(1, len(revenues)-1):
+    if revenues[i] > revenues[i-1] and revenues[i] > revenues[i+1]:
+        plt.text(years[i], revenues[i], f'{revenues[i]/1e9:.2f}B',
+                 ha='center', va='bottom', fontsize=9, color='red', fontweight='bold')
+
+plt.show()
+
+
+### CA total par région
+
+plt.figure(figsize=(15, 6))  
+
+# Premier graphique : Revenue par année et région 
+plt.subplot(2, 1, 1)
+
+for region in df4['Region'].unique():
+    subset = df4[df4['Region'] == region]
+    plt.plot(subset['Year'], subset['total_revenue'], label=region)
+
+plt.title('Graphique du revenu total par année et par région')
+plt.xlabel('Année')
+plt.ylabel('Total Revenue')
+plt.legend(title='Région')
+plt.legend(title='Région', bbox_to_anchor=(1.05, 1), loc='upper left')  
+
+# Deuxième graphique : Volume par année et région
+plt.subplot(2, 1, 2)
+
+for region in df4['Region'].unique():
+    subset = df4[df4['Region'] == region]
+    plt.plot(subset['Year'], subset['total_volume'], label=region)
+
+plt.title('Graphique du volume total par année et par région')
+plt.xlabel('Année')
+plt.ylabel('Total Volume')
+plt.legend(title='Région')
+plt.legend(title='Région', bbox_to_anchor=(1.05, 1), loc='upper left')  
+
+plt.tight_layout()
+plt.show()
+
+
+### Top model par CA 
+### Camembert de préférence 
+plt.figure(figsize=(8, 8))
+
+# On regroupe les revenus par modèle
+revenus_par_modele = df5.groupby('Model')['total_revenue'].sum()
+
+# Camembert
+plt.pie(
+    revenus_par_modele,
+    labels=revenus_par_modele.index,
+    autopct='%1.1f%%',
+    startangle=90
+)
+
+plt.title('Répartition du revenu total par modèle')
+plt.legend(title='Modèle', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+
+### Part de marché par type de transmission et type de carburant dans les régions
+
+# Regrouper par région, transmission et type de carburant
+df_grouped = (
+    df8.groupby(['Region', 'Transmission', 'Fuel_Type'])['total_sales']
+       .sum()
+       .reset_index()   
+)
+
+# Calcul des parts de marché (en %)
+df_grouped['market_share'] = (
+    df_grouped.groupby('Region')['total_sales']
+              .transform(lambda x: 100 * x / x.sum())
+)
+
+
+# Fusion Transmission + Fuel_Type pour simplifier les labels
+df_grouped['Category'] = df_grouped['Transmission'] + ' - ' + df_grouped['Fuel_Type']
+
+# Pivot pour avoir un tableau de type “Région = ligne / Catégorie = colonne”
+pivot = df_grouped.pivot(index='Region', columns='Category', values='market_share').fillna(0)
+
+# Graphique en barres empilées
+pivot.plot(kind='bar', stacked=True, figsize=(12,6), colormap='tab20')
+
+plt.title("Part de marché par type de transmission et carburant dans les régions")
+plt.xlabel("Région")
+plt.ylabel("Part de marché (%)")
+plt.legend(title="Transmission - Carburant", bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+# Taux de croissance annuel
+
+plt.figure(figsize=(10,5))
+plt.plot(df10['Year'], df10['taux_croissance_pourcent'])
+plt.title("Taux de croissance annuel")
+plt.xlabel("Années")
+plt.ylabel("Taux de croissance (%)")
+
+
+plt.show()
